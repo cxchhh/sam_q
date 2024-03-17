@@ -1,2 +1,4 @@
 checkpoints/*
-flagged
+flagged/
+__pycache__/
+imgs/
