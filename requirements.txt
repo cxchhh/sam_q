@@ -1,0 +1,6 @@
+numpy
+segment_anything
+gradio
+opencv-python
+torch
+torchvision

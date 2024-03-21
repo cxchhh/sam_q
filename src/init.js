@@ -91,6 +91,7 @@ function init() {
             ctx.rect(stx, sty, x - stx, y - sty);
             ctx.closePath();
             ctx.strokeStyle = "red";
+            ctx.lineWidth = 2;
             ctx.stroke();
         }
         canvas.onmouseup = function (e) {
@@ -124,16 +125,16 @@ function init() {
 
     }
 
-    globalThis.submit = function (i, m, p, mul) {
-        res = [i, m, null, mul];
+    globalThis.submit = function (mt,i, m, p, mul) {
+        res = [mt, i, m, null, mul];
         if (globalThis.mode == 'everything') {
-            res = [i, m, null, mul];
+            res = [mt, i, m, null, mul];
         }
         else if (globalThis.mode == 'points') {
-            res = [i, m, globalThis.points, mul];
+            res = [mt, i, m, globalThis.points, mul];
         }
         else if (globalThis.mode == 'box') {
-            res = [i, m, globalThis.box, mul];
+            res = [mt, i, m, globalThis.box, mul];
         }
         globalThis.restart = true;
         return res;

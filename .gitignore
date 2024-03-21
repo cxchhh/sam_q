@@ -1,4 +1,4 @@
-checkpoints/*
+checkpoints/*.pth
 flagged/
 __pycache__/
 imgs/
