@@ -4,3 +4,4 @@ gradio
 opencv-python
 torch
 torchvision
+fire

@@ -2,3 +2,5 @@ checkpoints/*.pth
 flagged/
 __pycache__/
 imgs/
+*.zip
+coco2017/
