@@ -1,9 +1,12 @@
-import time
+import time, os
+os.environ['SEGMENT_ANYTHING_FAST_USE_FLASH_4'] = '0'
+os.environ['FAST_USE_FLASH_4'] = '0'
 import numpy as np
 from utils.utils import add_anns, add_masks
 from torchao.quantization import apply_dynamic_quant
 from torch._inductor import config as inductorconfig
 import torch
+
 sam_checkpoint_b = "./checkpoints/sam_vit_b_01ec64.pth"
 sam_checkpoint_l = "./checkpoints/sam_vit_l_0b3195.pth"
 sam_checkpoint_h = "./checkpoints/sam_vit_h_4b8939.pth"
@@ -11,40 +14,48 @@ current_model_type = "vit_h"
 
 device = "cuda"
 
+
 def get_model(model_type, chkp, quantize=False):
     if quantize:
-        from segment_anything_fast import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
-    else:
-        from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
-    model = sam_model_registry[model_type](checkpoint=chkp).cuda()
-    model_mask_generator = SamAutomaticMaskGenerator(model)
-    model_predictor = SamPredictor(model)   
-    if quantize:
+        from segment_anything_fast import sam_model_registry
+        from utils.automask_generator import SamAutomaticMaskGenerator
+        model = sam_model_registry[model_type](checkpoint=chkp).cuda()
+        model_mask_generator = SamAutomaticMaskGenerator(model)
+        model_predictor = model_mask_generator.predictor
+
         from segment_anything_fast import tools
-        tools.apply_eval_dtype_predictor(model_predictor, 'float16')
+        tools.apply_eval_dtype_predictor(model_predictor, torch.bfloat16)
+
         for block in model_predictor.model.image_encoder.blocks:
             block.attn.use_rel_pos = True
 
         apply_dynamic_quant(model_predictor.model.image_encoder)
-        apply_dynamic_quant(model_mask_generator.predictor.model)
         inductorconfig.force_fuse_int_mm_with_mul = True
+    
         with torch.no_grad():
             with torch.autograd.profiler.record_function("compilation and warmup"):
                 model_predictor.model.image_encoder = torch.compile(
-                    model_predictor.model.image_encoder, mode="max-autotune", fullgraph=False)
-                # model_mask_generator.predictor.model = torch.compile(
-                #     model_mask_generator.predictor.model, mode="max-autotune", fullgraph=False)
+                    model_predictor.model.image_encoder, mode="max-autotune-no-cudagraphs", fullgraph=False)
+        # warm-up        
+        model_predictor.set_image(np.zeros([512,512,3], np.uint8))
 
+    else:
+        from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+        model = sam_model_registry[model_type](checkpoint=chkp).cuda()
+        model_mask_generator = SamAutomaticMaskGenerator(model)
+        model_predictor = model_mask_generator.predictor
+        
     return model, model_predictor, model_mask_generator
 
 sam_q, predictor_q, mask_generator_q = get_model(current_model_type, sam_checkpoint_h, True)
 sam, predictor, mask_generator = get_model(current_model_type, sam_checkpoint_h, False)
 
-
-def change_sam_ver(model_type):
+def change_sam_backbone(model_type):
     global sam, sam_q ,mask_generator, predictor, predictor_q, mask_generator_q
-    del sam, sam_q
-
+    if sam:
+        del sam
+        del sam_q  
+    torch.cuda.empty_cache()
     if model_type == "vit_h" or not model_type:
         sam_q, predictor_q, mask_generator_q = get_model(model_type, sam_checkpoint_h, True)
         sam, predictor, mask_generator = get_model(model_type, sam_checkpoint_h, False)
@@ -55,10 +66,11 @@ def change_sam_ver(model_type):
         sam_q, predictor_q, mask_generator_q = get_model(model_type, sam_checkpoint_b, True)
         sam, predictor, mask_generator = get_model(model_type, sam_checkpoint_b, False)
 
+    print("backbone changed to",model_type)
     return model_type
 
-
-def genmask_all(mask_gen,image):
+def genmask_all(mask_gen,image,quantize):
+    torch.cuda.empty_cache()
     t0 = time.time()
     masks = mask_gen.generate(image)
     t1 = time.time()
@@ -66,11 +78,12 @@ def genmask_all(mask_gen,image):
     res_img = add_anns(masks, image)
     return res_img, time_elps
 
-def genmask_points(pred,image,points,mulmask):
+def genmask_points(pred,image,points,mulmask,qauntize):
     input_points = np.array(points)*np.array([image.shape[1],image.shape[0]])
     input_labels = np.array([1]*len(points))
-    pred.set_image(image)
+
     t0 = time.time()
+    pred.set_image(image)
     masks, scores, logits = pred.predict(
         point_coords=input_points,
         point_labels=input_labels,
@@ -81,11 +94,12 @@ def genmask_points(pred,image,points,mulmask):
     res_img = add_masks(masks, image)
     return res_img, time_elps
 
-def genmask_box(pred,image,box,mulmask):
+def genmask_box(pred,image,box,mulmask,quantize):
     sorted_box=[min(box[0],box[2]),min(box[1],box[3]),max(box[0],box[2]),max(box[1],box[3])]
     input_box = np.array(sorted_box)*np.array([image.shape[1],image.shape[0]]*2)
-    pred.set_image(image)
+
     t0 = time.time()
+    pred.set_image(image)
     masks, scores, logits = pred.predict(
         box = input_box,
         multimask_output=mulmask,
@@ -100,15 +114,17 @@ def infer(mtype, image, mode, params, mulmask):
     time_elps = 0
     model_mask_gen, model_pred = (mask_generator, predictor) if mtype == 'base' else (mask_generator_q, predictor_q)
     if(mode=='everything'):
-        out, time_elps = genmask_all(model_mask_gen,image)
+        out, time_elps = genmask_all(model_mask_gen,image,(mtype=='quant'))
     elif(mode=='points'):
         if len(params) == 0:
             out = image
         else :
-            out, time_elps = genmask_points(model_pred, image, params, mulmask)
+            out, time_elps = genmask_points(model_pred, image, params, mulmask,(mtype=='quant'))
     elif(mode=='box'):
         if len(params) == 0:
             out = image
         else:
-            out, time_elps = genmask_box(model_pred, image, params, mulmask)
+            out, time_elps = genmask_box(model_pred, image, params, mulmask,(mtype=='quant'))
+    
+    time_elps = ('%.2f'% (time_elps * 1000)) + "ms"
     return [out, time_elps]

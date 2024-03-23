@@ -5,3 +5,4 @@ opencv-python
 torch
 torchvision
 fire
+git+https://github.com/pytorch-labs/segment-anything-fast.git

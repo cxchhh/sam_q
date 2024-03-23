@@ -4,3 +4,4 @@ __pycache__/
 imgs/
 *.zip
 coco2017/
+*.p
