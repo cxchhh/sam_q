@@ -27,16 +27,20 @@ with blocks as demo:
         with gradio.Column(scale=5):
             with gradio.Row():
                 outputImg = gradio.Image(label="base model output",type="numpy")
-                results = gradio.Textbox(interactive=False,label="base model inference time:",max_lines=1)
+                with gradio.Column():
+                    results = gradio.Textbox(interactive=False,label="base model inference time:",max_lines=1)
+                    memSize = gradio.Textbox(interactive=False,label="base model memory use:",max_lines=1)
             
             with gradio.Row():
                 outputImg_q = gradio.Image(label="quantized model output",type="numpy")
-                results_q = gradio.Textbox(interactive=False,label="quantized model inference time:",max_lines=1)
+                with gradio.Column():
+                    results_q = gradio.Textbox(interactive=False,label="quantized model inference time:",max_lines=1)
+                    memSize_q = gradio.Textbox(interactive=False,label="quantized model memory use:",max_lines=1)
     
     # the second 'mode' is a placeholder
-    submitBtn.click(fn=infer, inputs=[model_type,inputImg, mode, mode, multimask], outputs=[outputImg, results],
+    submitBtn.click(fn=infer, inputs=[model_type,inputImg, mode, mode, multimask], outputs=[outputImg, results, memSize],
                     js="(mt,i,m,p,mul) => globalThis.submit('base',i,m,p,mul)",).then(
-                    fn=infer, inputs=[model_type,inputImg, mode, mode, multimask], outputs=[outputImg_q, results_q],
+                    fn=infer, inputs=[model_type,inputImg, mode, mode, multimask], outputs=[outputImg_q, results_q, memSize_q],
                     js="(mt,i,m,p,mul) => globalThis.submit('quant',i,m,p,mul)")
     
 if __name__ == "__main__":

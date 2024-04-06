@@ -6,6 +6,7 @@ from utils.utils import add_anns, add_masks
 from torchao.quantization import apply_dynamic_quant
 from torch._inductor import config as inductorconfig
 import torch
+torch.set_default_tensor_type(torch.FloatTensor)
 
 sam_checkpoint_b = "./checkpoints/sam_vit_b_01ec64.pth"
 sam_checkpoint_l = "./checkpoints/sam_vit_l_0b3195.pth"
@@ -47,8 +48,13 @@ def get_model(model_type, chkp, quantize=False):
         
     return model, model_predictor, model_mask_generator
 
+ori_mem = torch.cuda.memory_allocated()
 sam_q, predictor_q, mask_generator_q = get_model(current_model_type, sam_checkpoint_h, True)
+sam_q_mem = torch.cuda.memory_allocated()
 sam, predictor, mask_generator = get_model(current_model_type, sam_checkpoint_h, False)
+sam_mem = torch.cuda.memory_allocated()
+sam_size = sam_mem - sam_q_mem
+sam_q_size = sam_q_mem - ori_mem
 
 def change_sam_backbone(model_type):
     global sam, sam_q ,mask_generator, predictor, predictor_q, mask_generator_q
@@ -71,9 +77,10 @@ def change_sam_backbone(model_type):
 
 def genmask_all(mask_gen,image,quantize):
     torch.cuda.empty_cache()
-    t0 = time.time()
+    
+    torch.cuda.synchronize();t0 = time.time()
     masks = mask_gen.generate(image)
-    t1 = time.time()
+    torch.cuda.synchronize();t1 = time.time()
     time_elps = (t1 - t0)
     res_img = add_anns(masks, image)
     return res_img, time_elps
@@ -82,14 +89,14 @@ def genmask_points(pred,image,points,mulmask,qauntize):
     input_points = np.array(points)*np.array([image.shape[1],image.shape[0]])
     input_labels = np.array([1]*len(points))
 
-    t0 = time.time()
+    torch.cuda.synchronize();t0 = time.time()
     pred.set_image(image)
     masks, scores, logits = pred.predict(
         point_coords=input_points,
         point_labels=input_labels,
         multimask_output=mulmask,
     )
-    t1 = time.time()
+    torch.cuda.synchronize();t1 = time.time()
     time_elps = (t1 - t0)
     res_img = add_masks(masks, image)
     return res_img, time_elps
@@ -98,20 +105,21 @@ def genmask_box(pred,image,box,mulmask,quantize):
     sorted_box=[min(box[0],box[2]),min(box[1],box[3]),max(box[0],box[2]),max(box[1],box[3])]
     input_box = np.array(sorted_box)*np.array([image.shape[1],image.shape[0]]*2)
 
-    t0 = time.time()
+    torch.cuda.synchronize();t0 = time.time()
     pred.set_image(image)
     masks, scores, logits = pred.predict(
         box = input_box,
         multimask_output=mulmask,
     )
-    t1 = time.time()
+    torch.cuda.synchronize();t1 = time.time()
     time_elps = (t1 - t0)
     res_img = add_masks(masks, image)
     return res_img, time_elps
 
-def infer(mtype, image, mode, params, mulmask):
+def infer(mtype, image: np.ndarray, mode, params, mulmask):
     out = None
     time_elps = 0
+    image = image.astype(np.float32)
     model_mask_gen, model_pred = (mask_generator, predictor) if mtype == 'base' else (mask_generator_q, predictor_q)
     if(mode=='everything'):
         out, time_elps = genmask_all(model_mask_gen,image,(mtype=='quant'))
@@ -125,6 +133,6 @@ def infer(mtype, image, mode, params, mulmask):
             out = image
         else:
             out, time_elps = genmask_box(model_pred, image, params, mulmask,(mtype=='quant'))
-    
     time_elps = ('%.2f'% (time_elps * 1000)) + "ms"
-    return [out, time_elps]
+    mem = sam_size if mtype == 'base' else sam_q_size
+    return [out, time_elps, f'{mem/1024/1024/1024}GB']
