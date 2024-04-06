@@ -3,7 +3,11 @@
 ![](./assets/screenshot.png)
 
 ### usage
-Clone this repo to your local directory, and run the following commands in it.
+Clone this repo to your local directory, and download the ViT weights using following command:
+```
+./download.sh
+```
+and then create the python environment:
 ```
 conda create -n samq python=3.10
 ```
@@ -13,6 +17,7 @@ conda activate samq
 ```
 pip install -r requirements.txt
 ```
+run the model:
 ```
 python run.py
 ```
