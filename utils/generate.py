@@ -1,4 +1,6 @@
 import time, os
+
+import pandas as pd
 os.environ['SEGMENT_ANYTHING_FAST_USE_FLASH_4'] = '0'
 os.environ['FAST_USE_FLASH_4'] = '0'
 import numpy as np
@@ -8,9 +10,13 @@ from torch._inductor import config as inductorconfig
 import torch
 torch.set_default_tensor_type(torch.FloatTensor)
 
-sam_checkpoint_b = "./checkpoints/sam_vit_b_01ec64.pth"
-sam_checkpoint_l = "./checkpoints/sam_vit_l_0b3195.pth"
-sam_checkpoint_h = "./checkpoints/sam_vit_h_4b8939.pth"
+from matplotlib import pyplot as plt
+
+chkpt_path = "./checkpoints"
+
+sam_checkpoint_b = f"{chkpt_path}/sam_vit_b_01ec64.pth"
+sam_checkpoint_l = f"{chkpt_path}/sam_vit_l_0b3195.pth"
+sam_checkpoint_h = f"{chkpt_path}/sam_vit_h_4b8939.pth"
 current_model_type = "vit_h"
 
 device = "cuda"
@@ -49,28 +55,47 @@ def get_model(model_type, chkp, quantize=False):
     return model, model_predictor, model_mask_generator
 
 ori_mem = torch.cuda.memory_allocated()
-sam_q, predictor_q, mask_generator_q = get_model(current_model_type, sam_checkpoint_h, True)
+sam_q, predictor_q, mask_generator_q = get_model(current_model_type, sam_checkpoint_h if current_model_type =="vit_h" 
+                                                 else sam_checkpoint_l if current_model_type =="vit_l"
+                                                 else sam_checkpoint_b
+                                                , True)
 sam_q_mem = torch.cuda.memory_allocated()
-sam, predictor, mask_generator = get_model(current_model_type, sam_checkpoint_h, False)
+sam, predictor, mask_generator = get_model(current_model_type, sam_checkpoint_h if current_model_type =="vit_h" 
+                                                 else sam_checkpoint_l if current_model_type =="vit_l"
+                                                 else sam_checkpoint_b, False)
 sam_mem = torch.cuda.memory_allocated()
 sam_size = sam_mem - sam_q_mem
 sam_q_size = sam_q_mem - ori_mem
 
 def change_sam_backbone(model_type):
     global sam, sam_q ,mask_generator, predictor, predictor_q, mask_generator_q
+    global ori_mem, sam_q_mem, sam_mem, sam_size, sam_q_size
     if sam:
         del sam
         del sam_q  
     torch.cuda.empty_cache()
+    # ori_mem = torch.cuda.memory_allocated()
     if model_type == "vit_h" or not model_type:
         sam_q, predictor_q, mask_generator_q = get_model(model_type, sam_checkpoint_h, True)
+        # sam_q_mem = torch.cuda.memory_allocated()
         sam, predictor, mask_generator = get_model(model_type, sam_checkpoint_h, False)
+        # sam_mem = torch.cuda.memory_allocated()
     elif model_type == "vit_l":
         sam_q, predictor_q, mask_generator_q = get_model(model_type, sam_checkpoint_l, True)
+        # sam_q_mem = torch.cuda.memory_allocated()
         sam, predictor, mask_generator = get_model(model_type, sam_checkpoint_l, False)
+        # sam_mem = torch.cuda.memory_allocated()
     elif model_type == "vit_b":
         sam_q, predictor_q, mask_generator_q = get_model(model_type, sam_checkpoint_b, True)
+        # sam_q_mem = torch.cuda.memory_allocated()
         sam, predictor, mask_generator = get_model(model_type, sam_checkpoint_b, False)
+        # sam_mem = torch.cuda.memory_allocated()
+
+    # sam_size = sam_mem - sam_q_mem
+    # sam_q_size = sam_q_mem - ori_mem
+
+    print(f'sam_size:{sam_size} sam_q_size{sam_q_size}')
+
 
     print("backbone changed to",model_type)
     return model_type
@@ -116,7 +141,13 @@ def genmask_box(pred,image,box,mulmask,quantize):
     res_img = add_masks(masks, image)
     return res_img, time_elps
 
+base_time = 0
+base_mem = 0
+quant_time = 0
+quant_mem = 0
+
 def infer(mtype, image: np.ndarray, mode, params, mulmask):
+    global base_time, base_mem, quant_time, quant_mem
     out = None
     time_elps = 0
     image = image.astype(np.float32)
@@ -133,6 +164,26 @@ def infer(mtype, image: np.ndarray, mode, params, mulmask):
             out = image
         else:
             out, time_elps = genmask_box(model_pred, image, params, mulmask,(mtype=='quant'))
-    time_elps = ('%.2f'% (time_elps * 1000)) + "ms"
+    time_elps = (time_elps * 1000)
     mem = sam_size if mtype == 'base' else sam_q_size
-    return [out, time_elps, f'{mem/1024/1024/1024}GB']
+
+    if mtype == "base":
+        base_time = time_elps
+        base_mem = mem/1024/1024/1024
+    else:
+        quant_time = time_elps
+        quant_mem = mem/1024/1024/1024
+
+    return out
+
+def plot_bars():
+    global base_time, base_mem, quant_time, quant_mem
+    return [pd.DataFrame({
+            "models": ['base model',
+                   'quantized model'],
+            "inference time / ms": [base_time, quant_time]
+            }), pd.DataFrame({
+            "models": ['base model',
+                   'quantized model'],
+            "memory size / GB": [base_mem, quant_mem]
+            })]
