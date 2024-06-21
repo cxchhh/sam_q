@@ -1,6 +1,6 @@
 # Quantization of SAM with gradio demo
 
-![](./assets/screenshot.png)
+![](./assets/img.png)
 
 ### usage
 Clone this repo to your local directory, and download the ViT weights using following command:
